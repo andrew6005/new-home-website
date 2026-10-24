@@ -1,4 +1,4 @@
-"""Single-property reservations: SQLite persistence, server auth and SMTP outbox."""
+"""Single-property reservations: SQLite persistence, server auth and mail outbox."""
 from contextlib import contextmanager
 import hashlib
 import hmac
@@ -15,6 +15,7 @@ import uuid
 from datetime import date, datetime, timedelta
 from email.message import EmailMessage
 from pathlib import Path
+from urllib import error as urlerror, request as urlrequest
 from zoneinfo import ZoneInfo
 
 from flask import Flask, jsonify, request, send_from_directory
@@ -26,7 +27,7 @@ DATA = Path(os.environ.get('DATA_DIR', ROOT / 'data'))
 DATA.mkdir(parents=True, exist_ok=True)
 DB = DATA / 'bookings.sqlite3'
 PRODUCTION = os.environ.get('APP_ENV') == 'production'
-ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', 'admin@haven.hk').lower()
+ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', 'andrewteddyjp@gmail.com').lower()
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', '')
 if PRODUCTION and (len(ADMIN_PASSWORD) < 12 or ADMIN_PASSWORD == 'Haven2026'):
     raise RuntimeError('Set a new ADMIN_PASSWORD of at least 12 characters before deployment.')
@@ -64,6 +65,14 @@ def initialize():
         CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, expires REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS limits (key TEXT PRIMARY KEY, hits INTEGER NOT NULL, expires REAL NOT NULL);
         ''')
+        # Existing deployed databases retain their reservations and queued mail.
+        # Serialize additive migrations when multiple Gunicorn workers start.
+        db.execute('BEGIN IMMEDIATE')
+        columns = {row['name'] for row in db.execute('PRAGMA table_info(reservations)')}
+        for name, definition in (('email_error', 'TEXT'), ('email_error_status', 'INTEGER'),
+                                 ('email_generation', 'INTEGER NOT NULL DEFAULT 0')):
+            if name not in columns:
+                db.execute(f'ALTER TABLE reservations ADD COLUMN {name} {definition}')
 
 
 initialize()
@@ -77,10 +86,56 @@ def config():
                 timezone=os.environ.get('PROPERTY_TIMEZONE', 'Europe/London'))
 
 
-def booking_ready():
+def mail_transport():
+    selected = os.environ.get('MAIL_TRANSPORT', 'auto').strip().lower()
+    if selected == 'resend' or (selected == 'auto' and (
+            os.environ.get('RESEND_API_KEY', '').strip() or
+            os.environ.get('SMTP_HOST', '').strip().lower() == 'smtp.resend.com')):
+        return 'resend'
+    return 'smtp'
+
+
+def missing_mail_settings():
     c = config()
-    return bool(c['address']) and all(re.fullmatch(r'(?:[01][0-9]|2[0-3]):[0-5][0-9]', c[k]) for k in ('checkinTime', 'checkoutTime')) and all(
-        os.environ.get(k) for k in ('SMTP_HOST', 'SMTP_USER', 'SMTP_PASSWORD', 'MAIL_FROM'))
+    missing = []
+    if not c['address'].strip():
+        missing.append('PROPERTY_ADDRESS')
+    for key, field in (('CHECKIN_TIME', 'checkinTime'), ('CHECKOUT_TIME', 'checkoutTime')):
+        if not re.fullmatch(r'(?:[01][0-9]|2[0-3]):[0-5][0-9]', c[field]):
+            missing.append(key)
+    if os.environ.get('MAIL_TRANSPORT', 'auto').strip().lower() not in ('auto', 'smtp', 'resend'):
+        missing.append('MAIL_TRANSPORT')
+    required = ['MAIL_FROM']
+    if mail_transport() == 'resend':
+        if not resend_api_key():
+            # Existing SMTP_PASSWORD settings continue to work with Resend HTTPS.
+            missing.append('RESEND_API_KEY / SMTP_PASSWORD')
+    else:
+        required += ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASSWORD']
+        try:
+            if not 1 <= int(os.environ.get('SMTP_PORT', '587')) <= 65535:
+                raise ValueError
+        except ValueError:
+            missing.append('SMTP_PORT')
+    missing.extend(key for key in required if not os.environ.get(key, '').strip())
+    return missing
+
+
+def resend_api_key():
+    return os.environ.get('RESEND_API_KEY', '').strip() or os.environ.get('SMTP_PASSWORD', '').strip()
+
+
+def booking_ready():
+    return not missing_mail_settings()
+
+
+def mail_worker_enabled():
+    return os.environ.get('DISABLE_MAIL_WORKER') != '1'
+
+
+def mail_diagnostics():
+    return dict(transport=mail_transport(), workerEnabled=mail_worker_enabled(),
+                configured=booking_ready(), missingSettings=missing_mail_settings())
 
 
 def fail(message, status=400):
@@ -142,7 +197,8 @@ def availability():
     with connect() as db:
         rows = db.execute('SELECT payload FROM reservations WHERE cancelled=0').fetchall()
     return jsonify(ranges=[{k: json.loads(r['payload'])[k] for k in ('checkin', 'checkout')} for r in rows],
-                   config=config(), bookingReady=not PRODUCTION or booking_ready(), emailConfigured=booking_ready())
+                   config=config(), bookingReady=not PRODUCTION or booking_ready(),
+                   emailConfigured=booking_ready() and mail_worker_enabled(), mailWorkerEnabled=mail_worker_enabled())
 
 
 @app.get('/api/property')
@@ -201,8 +257,10 @@ def list_reservations():
     if not admin():
         return fail('Sign in required', 401)
     with connect() as db:
-        rows = db.execute('SELECT payload,email_status FROM reservations WHERE cancelled=0 ORDER BY created DESC').fetchall()
-    return jsonify(reservations=[dict(json.loads(row['payload']), emailStatus=row['email_status']) for row in rows])
+        rows = db.execute('SELECT payload,email_status,email_error,email_error_status FROM reservations WHERE cancelled=0 ORDER BY created DESC').fetchall()
+    return jsonify(reservations=[dict(json.loads(row['payload']), emailStatus=row['email_status'],
+                                      emailError=row['email_error'] or '', emailErrorStatus=row['email_error_status']) for row in rows],
+                   mail=mail_diagnostics())
 
 
 def validate_booking(body):
@@ -274,7 +332,13 @@ def retry_email(reservation_id):
     if not admin():
         return fail('Sign in required', 401)
     with connect() as db:
-        db.execute("UPDATE reservations SET email_status='pending', attempts=0,next_attempt=0 WHERE id=? AND cancelled=0 AND email_status!='sending'", (reservation_id,))
+        db.execute('BEGIN IMMEDIATE')
+        row = db.execute('SELECT email_status FROM reservations WHERE id=? AND cancelled=0', (reservation_id,)).fetchone()
+        if row is None:
+            return fail('Reservation not found', 404)
+        if row['email_status'] == 'sending':
+            return fail('Email is being sent. Please wait before retrying.', 409)
+        db.execute("UPDATE reservations SET email_status='pending', attempts=0,next_attempt=0,email_error=NULL,email_error_status=NULL,email_generation=email_generation+1 WHERE id=? AND cancelled=0 AND email_status!='sending'", (reservation_id,))
     return jsonify(ok=True)
 
 
@@ -303,6 +367,108 @@ Please arrive on your booked check-in date at the stated time. If your plans cha
     return m
 
 
+class MailDeliveryError(Exception):
+    """Only safe categories/statuses may leave the mail transport."""
+    def __init__(self, category, status=None):
+        super().__init__(category)
+        self.category = category
+        self.status = status
+
+
+def provider_error_category(status, body):
+    # Provider detail is examined only in memory; never persist or log it because
+    # it can contain the sender, recipient or credential fragments.
+    try:
+        parsed = json.loads(body)
+        detail = ' '.join(str(parsed.get(field, '')) for field in ('name', 'message')).lower() if isinstance(parsed, dict) else ''
+    except (ValueError, TypeError, UnicodeError):
+        detail = ''
+    if status == 401:
+        return 'authentication_failed'
+    if status == 429:
+        return 'rate_limited'
+    if status == 403 and any(term in detail for term in ('testing emails', 'own email address', 'test recipient')):
+        return 'test_recipient_only'
+    if 'domain' in detail and any(term in detail for term in ('not verified', 'unverified', 'verify')):
+        return 'domain_unverified'
+    if any(term in detail for term in ('invalid api', 'invalid_api', 'api key', 'api_key', 'unauthorized')):
+        return 'authentication_failed'
+    if any(term in detail for term in ('sender', '`from`', '"from"', 'from address')):
+        return 'sender_rejected'
+    if any(term in detail for term in ('recipient', '`to`', '"to"', 'to address')):
+        return 'recipient_rejected'
+    return 'provider_rejected'
+
+
+class NoMailRedirects(urlrequest.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Never forward an API credential away from the fixed provider endpoint.
+        return None
+
+
+def send_resend(message, idempotency_key):
+    body = {'from': str(message['From']), 'to': [str(message['To'])],
+            'subject': str(message['Subject']), 'text': message.get_content()}
+    req = urlrequest.Request('https://api.resend.com/emails',
+                             data=json.dumps(body, ensure_ascii=False).encode('utf-8'),
+                             headers={'Authorization': 'Bearer ' + resend_api_key(),
+                                      'Content-Type': 'application/json', 'Accept': 'application/json',
+                                      'User-Agent': 'MoonHouseBooking/1.0',
+                                      'Idempotency-Key': idempotency_key}, method='POST')
+    opener = urlrequest.build_opener(NoMailRedirects(), urlrequest.HTTPSHandler(context=ssl.create_default_context()))
+    try:
+        with opener.open(req, timeout=30) as response:
+            status = response.getcode()
+            result = response.read(16384)
+            if not 200 <= status < 300:
+                raise MailDeliveryError(provider_error_category(status, result), status)
+            try:
+                accepted = json.loads(result)
+            except (ValueError, UnicodeError):
+                accepted = None
+            # A successful HTTP response without an accepted email ID is not a
+            # successful send; leave it queued for retry with the same key.
+            if not isinstance(accepted, dict) or not isinstance(accepted.get('id'), str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,127}', accepted['id']):
+                raise MailDeliveryError('provider_rejected', status)
+    except urlerror.HTTPError as exc:
+        try:
+            detail = exc.read(16384)
+        finally:
+            exc.close()
+        raise MailDeliveryError(provider_error_category(exc.code, detail), exc.code) from None
+
+
+def send_smtp(message):
+    host, port = os.environ['SMTP_HOST'].strip(), int(os.environ.get('SMTP_PORT', '587'))
+    transport = smtplib.SMTP_SSL if port == 465 else smtplib.SMTP
+    with transport(host, port, timeout=30, **({'context': ssl.create_default_context()} if port == 465 else {})) as smtp:
+        if port != 465:
+            smtp.starttls(context=ssl.create_default_context())
+        smtp.login(os.environ['SMTP_USER'], os.environ['SMTP_PASSWORD'])
+        refused = smtp.send_message(message)
+        if refused:
+            raise smtplib.SMTPRecipientsRefused(refused)
+
+
+def safe_mail_error(exc):
+    if isinstance(exc, MailDeliveryError):
+        return exc.category, exc.status
+    if isinstance(exc, smtplib.SMTPAuthenticationError):
+        return 'authentication_failed', exc.smtp_code
+    if isinstance(exc, smtplib.SMTPSenderRefused):
+        return 'sender_rejected', exc.smtp_code
+    if isinstance(exc, smtplib.SMTPRecipientsRefused):
+        return 'recipient_rejected', None
+    if isinstance(exc, smtplib.SMTPResponseException):
+        return 'provider_rejected', exc.smtp_code
+    cause = exc.reason if isinstance(exc, urlerror.URLError) else exc
+    if isinstance(cause, ssl.SSLError):
+        return 'tls_error', None
+    if isinstance(exc, (OSError, urlerror.URLError, smtplib.SMTPServerDisconnected)):
+        return 'network_error', None
+    return 'unexpected_error', None
+
+
 def deliver_pending():
     if not booking_ready():
         return
@@ -314,20 +480,19 @@ def deliver_pending():
         db.execute("UPDATE reservations SET email_status='sending',next_attempt=? WHERE id=?", (time.time()+300, row['id']))
     try:
         message = mail_message(json.loads(row['payload']))
-        host, port = os.environ['SMTP_HOST'], int(os.environ.get('SMTP_PORT', '587'))
-        transport = smtplib.SMTP_SSL if port == 465 else smtplib.SMTP
-        with transport(host, port, timeout=30, **({'context': ssl.create_default_context()} if port == 465 else {})) as smtp:
-            if port != 465:
-                smtp.starttls(context=ssl.create_default_context())
-            smtp.login(os.environ['SMTP_USER'], os.environ['SMTP_PASSWORD'])
-            smtp.send_message(message)
-        status, retry = 'sent', 0
-    except Exception:
-        # Never put guest data or SMTP credentials in logs.
-        app.logger.warning('Confirmation email failed; queued for retry.')
+        if mail_transport() == 'resend':
+            send_resend(message, f"booking-confirmation/{row['id']}/{row['email_generation']}")
+        else:
+            send_smtp(message)
+        status, retry, error, error_status = 'sent', 0, None, None
+    except Exception as exc:
+        error, error_status = safe_mail_error(exc)
+        # Category and status are safe; exception text may contain private data.
+        app.logger.warning('Confirmation email failed (%s); queued for retry.', error)
         status, retry = 'failed', time.time() + min(3600, 60 * 2 ** row['attempts'])
     with connect() as db:
-        db.execute('UPDATE reservations SET email_status=?,attempts=attempts+1,next_attempt=? WHERE id=?', (status, retry, row['id']))
+        db.execute('UPDATE reservations SET email_status=?,attempts=attempts+1,next_attempt=?,email_error=?,email_error_status=? WHERE id=? AND email_generation=?',
+                   (status, retry, error, error_status, row['id'], row['email_generation']))
 
 
 def mail_worker():
@@ -341,7 +506,7 @@ def mail_worker():
         time.sleep(10)
 
 
-if os.environ.get('DISABLE_MAIL_WORKER') != '1':
+if mail_worker_enabled():
     threading.Thread(target=mail_worker, daemon=True).start()
 
 if __name__ == '__main__':

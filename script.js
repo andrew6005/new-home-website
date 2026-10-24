@@ -450,7 +450,7 @@ const booked = new Set([]),
   key = (d) =>
     `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
   t = () => I18N[currentLang];
-let reservations = [], availabilityRanges = [], backendReady = false, stayConfig = {};
+let reservations = [], availabilityRanges = [], backendReady = false, stayConfig = {}, mailConfig = null;
 async function api(path, method = "GET", body) {
   const response = await fetch(`/api${path}`, {
     method, credentials: "same-origin",
@@ -472,13 +472,15 @@ async function refreshAvailability() {
   backendReady = data.bookingReady;
   const status = $("#connectionStatus");
   status.hidden = backendReady && data.emailConfigured;
-  status.textContent = !backendReady ? "網上預訂尚未開放 / Online booking is not open yet" : !data.emailConfigured ? "本機測試模式：寄件服務及入住資料尚未設定，確認電郵暫未能寄出。 / Local test mode: confirmation email is not configured." : "";
+  status.textContent = !backendReady ? "網上預訂尚未開放 / Online booking is not open yet" : !data.emailConfigured ? "確認電郵服務暫未準備好，確認電郵暫未能寄出。 / The confirmation email service is not ready; confirmation emails cannot be sent yet." : "";
   rebuildBookedDates();
   renderCalendars();
   updatePrice();
 }
 async function refreshReservations() {
-  reservations = (await api("/reservations")).reservations;
+  const data = await api("/reservations");
+  reservations = data.reservations;
+  mailConfig = data.mail || null;
 }
 function siteToday() {
   return new Intl.DateTimeFormat("en-CA", { timeZone: stayConfig.timezone || "Europe/London", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
@@ -835,6 +837,45 @@ function bookingWords() {
           deleteError: "無法刪除預訂，請重試。",
         };
 }
+function mailWords() {
+  const words = {
+    "zh-HK": {
+      title: "確認電郵", transport: "寄件方式", configured: "設定已填齊；實際寄件結果請睇每筆訂單。", missing: "尚欠設定", disabled: "寄件程序已停用，請將 DISABLE_MAIL_WORKER 改為 0 並重新部署。", unknown: "寄件設定狀態未能取得，請更新網站後重新登入。", accepted: "「寄件服務已接收」只表示服務接受咗郵件，未代表收件匣已收到；請同時檢查 Resend 寄件紀錄及垃圾郵件。", retry: "重試寄信", retryError: "未能安排重試，請檢查寄件設定後再試。", code: "服務代碼",
+      states: { pending: "等待寄出", sending: "處理中", sent: "寄件服務已接收", failed: "寄件失敗" },
+      errors: { test_recipient_only: "Resend 測試地址只可寄畀註冊帳戶嘅電郵。要寄畀其他人，請先驗證自己嘅網域並更改 MAIL_FROM。", domain_unverified: "寄件網域未驗證，請喺 Resend 完成網域驗證並檢查 MAIL_FROM。", authentication_failed: "認證失敗，請檢查 API key 是否有效及具有寄件權限。", rate_limited: "寄件服務限制咗請求次數，請稍後重試並檢查寄件配額。", network_error: "無法連接寄件服務，請檢查後端網絡及寄件方式。", tls_error: "寄件服務安全連線失敗，請檢查 SMTP 連線設定。", sender_rejected: "寄件地址被拒絕，請檢查 MAIL_FROM 及網域驗證。", recipient_rejected: "收件地址被拒絕，請檢查住客電郵。", provider_rejected: "寄件服務拒絕請求，請檢查 Resend 寄件紀錄及後端日誌。", unexpected_error: "寄件未能完成，請檢查後端日誌後重試。" },
+    },
+    "zh-CN": {
+      title: "确认邮件", transport: "发送方式", configured: "设置已填齐；实际发送结果请查看每笔订单。", missing: "缺少设置", disabled: "发送程序已停用，请将 DISABLE_MAIL_WORKER 改为 0 并重新部署。", unknown: "无法获取邮件设置状态，请更新网站后重新登录。", accepted: "“邮件服务已接收”仅表示服务接受了邮件，不代表收件箱已收到；请同时检查 Resend 发送记录和垃圾邮件。", retry: "重试发送", retryError: "无法安排重试，请检查邮件设置后重试。", code: "服务代码",
+      states: { pending: "等待发送", sending: "处理中", sent: "邮件服务已接收", failed: "发送失败" },
+      errors: { test_recipient_only: "Resend 测试地址仅能发送到注册账户的邮箱。发送给其他人前，请验证自己的域名并修改 MAIL_FROM。", domain_unverified: "发件域名未验证，请在 Resend 完成域名验证并检查 MAIL_FROM。", authentication_failed: "认证失败，请检查 API key 是否有效并具有发送权限。", rate_limited: "邮件服务限制了请求次数，请稍后重试并检查发送配额。", network_error: "无法连接邮件服务，请检查后端网络及发送方式。", tls_error: "邮件服务安全连接失败，请检查 SMTP 连接设置。", sender_rejected: "发件地址被拒绝，请检查 MAIL_FROM 和域名验证。", recipient_rejected: "收件地址被拒绝，请检查住客邮箱。", provider_rejected: "邮件服务拒绝请求，请检查 Resend 发送记录和后端日志。", unexpected_error: "邮件发送未完成，请检查后端日志后重试。" },
+    },
+    en: {
+      title: "Confirmation emails", transport: "Transport", configured: "Required settings are present; see each reservation for the sending result.", missing: "Missing settings", disabled: "The mail worker is disabled. Set DISABLE_MAIL_WORKER to 0 and redeploy.", unknown: "Mail configuration status is unavailable. Update the website and sign in again.", accepted: "Accepted by mail service means the provider accepted the email, not that it reached the inbox. Check the Resend email log and spam folder as well.", retry: "Retry email", retryError: "Unable to queue the email. Check the mail settings and try again.", code: "Service code",
+      states: { pending: "Queued", sending: "Processing", sent: "Accepted by mail service", failed: "Sending failed" },
+      errors: { test_recipient_only: "The Resend test sender can only email the account's registered address. Verify your own domain and update MAIL_FROM to email other recipients.", domain_unverified: "The sender domain is not verified. Verify it in Resend and check MAIL_FROM.", authentication_failed: "Authentication failed. Check that the API key is valid and has sending permission.", rate_limited: "The service rate limit was reached. Try again later and check the sending quota.", network_error: "Unable to connect to the mail service. Check the server network and mail transport.", tls_error: "The secure mail connection failed. Check the SMTP connection settings.", sender_rejected: "The sender address was rejected. Check MAIL_FROM and domain verification.", recipient_rejected: "The recipient address was rejected. Check the guest's email address.", provider_rejected: "The mail service rejected the request. Check the Resend email log and server logs.", unexpected_error: "Sending could not be completed. Check the server logs before retrying." },
+    },
+    de: {
+      title: "Bestätigungs-E-Mails", transport: "Versandart", configured: "Die erforderlichen Einstellungen sind vorhanden. Das Versandergebnis steht bei jeder Buchung.", missing: "Fehlende Einstellungen", disabled: "Der E-Mail-Dienst ist deaktiviert. DISABLE_MAIL_WORKER auf 0 setzen und erneut bereitstellen.", unknown: "Der E-Mail-Konfigurationsstatus ist nicht verfügbar. Website aktualisieren und erneut anmelden.", accepted: "Vom E-Mail-Dienst angenommen bedeutet nicht, dass die Nachricht im Posteingang angekommen ist. Auch das Resend-Versandprotokoll und den Spamordner prüfen.", retry: "Erneut senden", retryError: "Die E-Mail konnte nicht eingereiht werden. Einstellungen prüfen und erneut versuchen.", code: "Dienstcode",
+      states: { pending: "In Warteschlange", sending: "In Bearbeitung", sent: "Vom E-Mail-Dienst angenommen", failed: "Versand fehlgeschlagen" },
+      errors: { test_recipient_only: "Der Resend-Testabsender darf nur an die registrierte Konto-Adresse senden. Für andere Empfänger die eigene Domain verifizieren und MAIL_FROM ändern.", domain_unverified: "Die Absenderdomain ist nicht verifiziert. In Resend verifizieren und MAIL_FROM prüfen.", authentication_failed: "Authentifizierung fehlgeschlagen. Gültigkeit und Sendeberechtigung des API-Schlüssels prüfen.", rate_limited: "Das Anfragelimit wurde erreicht. Später erneut versuchen und das Versandkontingent prüfen.", network_error: "Keine Verbindung zum E-Mail-Dienst. Servernetzwerk und Versandart prüfen.", tls_error: "Die sichere Verbindung ist fehlgeschlagen. SMTP-Einstellungen prüfen.", sender_rejected: "Absenderadresse abgelehnt. MAIL_FROM und Domainverifizierung prüfen.", recipient_rejected: "Empfängeradresse abgelehnt. E-Mail-Adresse des Gastes prüfen.", provider_rejected: "Der E-Mail-Dienst hat die Anfrage abgelehnt. Resend-Versandprotokoll und Serverprotokolle prüfen.", unexpected_error: "Der Versand konnte nicht abgeschlossen werden. Vor einem erneuten Versuch die Serverprotokolle prüfen." },
+    },
+  };
+  return words[currentLang] || words.en;
+}
+function mailDiagnostics() {
+  const w = mailWords();
+  if (!mailConfig) return `<div class="mail-diagnostics"><b>${w.title}</b><p>${w.unknown}</p></div>`;
+  const transport = mailConfig.transport === "resend" ? "Resend HTTPS API" : "SMTP";
+  const missing = Array.isArray(mailConfig.missingSettings) ? mailConfig.missingSettings : [];
+  return `<div class="mail-diagnostics"><b>${w.title}</b><p>${w.transport}: ${transport}. ${mailConfig.configured ? w.configured : `${w.missing}: ${missing.map(escapeHTML).join(", ") || "—"}`}</p>${mailConfig.workerEnabled === false ? `<p class="mail-error">${w.disabled}</p>` : ""}<p>${w.accepted}</p></div>`;
+}
+function reservationEmailCell(reservation, index) {
+  const w = mailWords();
+  const status = w.states[reservation.emailStatus] || w.states.pending;
+  const reason = reservation.emailError ? w.errors[reservation.emailError] || w.errors.unexpected_error : "";
+  const code = Number.isInteger(reservation.emailErrorStatus) ? ` (${w.code}: ${reservation.emailErrorStatus})` : "";
+  return `<td class="reservation-email"><span>${escapeHTML(status)}</span>${reason ? `<p class="mail-error">${escapeHTML(reason + code)}</p>` : ""}<button type="button" class="retry-email" data-reservation-index="${index}"${reservation.emailStatus === "sending" ? " disabled" : ""}>↻ ${w.retry}</button></td>`;
+}
 function bookingsTable() {
   let w = bookingWords(),
     rows = reservations
@@ -842,10 +883,10 @@ function bookingsTable() {
       .sort((a, b) => a.reservation.checkin.localeCompare(b.reservation.checkin))
       .map(
         ({ reservation: r, index }) =>
-          `<tr><td><b>${escapeHTML(r.id)}</b></td><td>${escapeHTML(r.guest)}</td><td>${escapeHTML(r.contact || "—")}</td><td>${escapeHTML(r.checkin)}</td><td>${escapeHTML(r.checkout)}</td><td>${r.guests}</td><td>£${r.total}</td><td><span class="status-pill">${w.confirmed}</span></td><td>${escapeHTML(r.emailStatus || "pending")} <button type="button" class="retry-email" data-reservation-index="${index}">↻ Email</button></td><td><button type="button" class="delete-reservation" data-reservation-index="${index}">${w.remove}</button></td></tr>`,
+          `<tr><td><b>${escapeHTML(r.id)}</b></td><td>${escapeHTML(r.guest)}</td><td>${escapeHTML(r.contact || "—")}</td><td>${escapeHTML(r.checkin)}</td><td>${escapeHTML(r.checkout)}</td><td>${r.guests}</td><td>£${r.total}</td><td><span class="status-pill">${w.confirmed}</span></td>${reservationEmailCell(r, index)}<td><button type="button" class="delete-reservation" data-reservation-index="${index}">${w.remove}</button></td></tr>`,
       )
       .join("");
-  return `<section class="reservation-admin"><div class="reservation-heading"><div><span class="admin-label">BOOKINGS</span><h2>${w.title}</h2></div><b>${reservations.length} ${w.upcoming}</b></div><div class="table-wrap"><table><thead><tr><th>${w.ref}</th><th>${w.guest}</th><th>${reservationWords().contact}</th><th>${w.checkin}</th><th>${w.checkout}</th><th>${w.people}</th><th>${w.amount}</th><th>${w.status}</th><th>Email</th><th>${w.actions}</th></tr></thead><tbody>${rows || `<tr><td colspan="10">${w.empty}</td></tr>`}</tbody></table></div></section>`;
+  return `<section class="reservation-admin"><div class="reservation-heading"><div><span class="admin-label">BOOKINGS</span><h2>${w.title}</h2></div><b>${reservations.length} ${w.upcoming}</b></div>${mailDiagnostics()}<div class="table-wrap"><table><thead><tr><th>${w.ref}</th><th>${w.guest}</th><th>${reservationWords().contact}</th><th>${w.checkin}</th><th>${w.checkout}</th><th>${w.people}</th><th>${w.amount}</th><th>${w.status}</th><th>Email</th><th>${w.actions}</th></tr></thead><tbody>${rows || `<tr><td colspan="10">${w.empty}</td></tr>`}</tbody></table></div></section>`;
 }
 function bindReservationActions() {
   $$(".retry-email").forEach(button => {
@@ -857,7 +898,7 @@ function bindReservationActions() {
         await refreshReservations();
         $(".reservation-admin").outerHTML = bookingsTable();
         bindReservationActions();
-      } catch { window.alert(reservationWords().saveError); button.disabled = false; }
+      } catch { window.alert(mailWords().retryError); button.disabled = false; }
     };
   });
   $$(".delete-reservation").forEach((button) => {
@@ -993,6 +1034,7 @@ function adminPanel() {
   $("#logout").onclick = async () => {
     await api("/logout", "POST", {});
     reservations = [];
+    mailConfig = null;
     adminLoggedIn = false;
     openAdmin();
   };

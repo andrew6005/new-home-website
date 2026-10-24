@@ -48,6 +48,6 @@ fi
 printf '\n請用瀏覽器開啟：http://localhost:8001/\n'
 printf '測試資料會保留喺 data/local-test，唔會寄出電郵。\n'
 printf '停止網站：喺呢個 Terminal 視窗按 Control+C。\n'
-printf 'Admin：預設 admin@haven.hk / Haven2026（如 .env 有修改，以 .env 為準）。\n\n'
+printf 'Admin：預設 andrewteddyjp@gmail.com / Haven2026（如 .env 有修改，以 .env 為準）。\n\n'
 
 exec .venv/bin/python server.py

@@ -862,6 +862,32 @@ footer small {
   font-size: 12px;
   color: var(--sage);
 }
+.mail-diagnostics {
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.mail-diagnostics p {
+  margin: 6px 0 0;
+}
+.reservation-email {
+  min-width: 210px;
+  max-width: 320px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.reservation-email .retry-email {
+  display: block;
+  margin-top: 8px;
+}
+.mail-error {
+  color: #a32929;
+  margin: 6px 0;
+}
 .table-wrap {
   overflow-x: auto;
 }

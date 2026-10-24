@@ -1,6 +1,6 @@
 # Moon House 預訂網站
 
-已提供前端 + Python/Flask API + SQLite 資料庫 + SMTP 確認電郵佇列。
+已提供前端 + Python/Flask API + SQLite 資料庫 + Resend HTTPS／SMTP 確認電郵佇列。
 
 ## 自己內部測試：Mac 啟動方法
 
@@ -18,7 +18,7 @@
 原本 `data/bookings.sqlite3` 及相片／文字設定不會被搬移或刪除；測試模式首次開啟會由獨立、空白資料開始，所以原本已儲存的預訂、相片及文字修改不會在這個測試環境顯示。
 如要暫時測試輸入 email，可使用 `test@example.com`；真正收信測試則要用自己控制的收件地址，見下面設定。
 
-本機預設 Admin：**`admin@haven.hk` / `Haven2026`**。如果 `.env` 已設定 `ADMIN_EMAIL` 或 `ADMIN_PASSWORD`，請用該設定登入。
+本機預設 Admin：**`andrewteddyjp@gmail.com` / `Haven2026`**。如果 `.env` 已設定 `ADMIN_EMAIL` 或 `ADMIN_PASSWORD`，請用該設定登入。
 預設密碼只供本機測試，正式上線必須設定新的密碼。
 
 ## 建議自己逐項測試
@@ -70,15 +70,20 @@ PORT=8000 .venv/bin/python server.py
 以上手動寄件模式預設使用原本 `data/` 資料；啟用後可能會寄出當中尚未處理的電郵。
 請勿把 `DATA_DIR` 改成 `data/local-test` 來啟用真實寄件，避免內部測試訂單被寄出。
 
-必需資料：住宿地址 `PROPERTY_ADDRESS`、入住 `CHECKIN_TIME`、退房 `CHECKOUT_TIME`（24 小時 HH:MM）、寄件 email `MAIL_FROM`、SMTP 主機、帳號及密碼。
+必需資料：住宿地址 `PROPERTY_ADDRESS`、入住 `CHECKIN_TIME`、退房 `CHECKOUT_TIME`（24 小時 HH:MM）、寄件 email `MAIL_FROM`，以及寄件服務憑證。
+
+Resend 建議設 `MAIL_TRANSPORT=resend`，以 HTTPS 寄信。原本 `SMTP_PASSWORD` 裏的 Resend API key 可以直接沿用；亦可選擇另外設定 `RESEND_API_KEY`（優先使用）。
+預設 `MAIL_TRANSPORT=auto`：當 `SMTP_HOST=smtp.resend.com` 或 `RESEND_API_KEY` 有值，就用 Resend HTTPS；其他 SMTP 主機沿用 SMTP。
+Resend HTTPS 不依賴 SMTP 的 465／587 連接埠。一般 SMTP 服務仍要設定主機、使用者及密碼。
+如出現寄件問題，按 [寄件修正部署指引](DEPLOY-EMAIL-FIX.md) 操作。
 時區預設 `Europe/London`，跟隨 Belfast 夏令／冬令時間。地址及時間未獲確認，所以沒有代填。
-SMTP 使用 587 STARTTLS 或 465 TLS；請使用寄件服務提供的 SMTP 密碼／應用程式密碼。
+使用一般 SMTP 服務時，以 587 STARTTLS 或 465 TLS 連線，並使用該服務提供的 SMTP 密碼／應用程式密碼。Resend HTTPS 則使用 Resend API key。
 
 每封確認電郵包含訂單號、姓名、地址、入住／退房日期與時間、人數、金額及按時到達提醒；目前採繁體中文及英文雙語。
 回覆會寄到 `MAIL_FROM`，請使用有人收信的地址。
-預訂成功不等於電郵已送達。佇列每 10 秒處理，失敗會重試，最多六次，Admin 可按 `↻ Email` 再試。
-`pending` = 等候寄送；`sending` = 寄送中；`sent` = SMTP 服務接受；`failed` = 寄送失敗。
-SMTP 接受不保證到達收件匣，需在正式上線前用真實收件地址測試並檢查垃圾郵件。
+預訂成功不等於電郵已送達。佇列每 10 秒處理，失敗會重試，最多六次，Admin 可按「重試寄信」再試。
+`pending` = 等候寄送；`sending` = 寄送中；`sent` = 寄件服務已接受（未驗證送達收件匣）；`failed` = 寄送失敗。
+寄件服務接受不保證到達收件匣，需在正式上線前用真實收件地址測試並檢查垃圾郵件。
 管理員刪除預訂不會自動寄取消通知；已寄出的確認信不能撤回。
 
 ## 上線（前後端一起部署）
@@ -92,6 +97,8 @@ Dockerfile 已提供。使用單一服務、單一 worker；請勿以 serverless
 4. 如平台位於單一可信任代理後，設定 `TRUST_PROXY=1`，讓登入／預訂速率限制按訪客 IP 計算；否則維持 0。
 5. 使用 HTTPS 網址，測試客人預訂、實際收信、另一部裝置的 Admin 查看／刪除及日期重新開放。
 6. 設定資料庫備份（SQLite online backup API 或停機後複製整個資料目錄），並定期測試復原。
+
+已上線的 Render 亦需將 `ADMIN_EMAIL` 設為 `andrewteddyjp@gmail.com`，儲存並部署；環境變數會覆蓋程式預設值。
 
 正式模式在寄件／住宿資料欠缺時不開放網上預訂。本機開發模式容許測試，畫面會提示尚未設定寄件。
 Render 預設磁碟是暫存，必須另設持久磁碟；目前需要付費服務。參考官方文件：
@@ -113,4 +120,4 @@ https://render.com/docs/docker
 node --check script.js
 ```
 
-目前尚未替你購買 hosting、部署公開網站或設定寄件帳號。自動測試以模擬 SMTP 驗證內容及重試，沒有寄出真實郵件。
+目前尚未替你購買 hosting、部署公開網站或設定寄件帳號。自動測試以模擬 Resend HTTPS／SMTP 驗證內容及重試，沒有寄出真實郵件。
