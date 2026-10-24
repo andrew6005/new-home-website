@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="zh-HK">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta
+      content="Bushmills, Northern Ireland holiday cottage near the Giant's Causeway."
+    />
+    <title>Belfast city centre Moon House</title>
+    <link rel="preconnect" href="https://images.unsplash.com" />
+    <link rel="stylesheet" href="style.css?v=5" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="#top">
+        <span>北</span>
+        <strong>Belfast city centre Moon House</strong>
+      </a>
+      <nav>
+        <a href="#about" data-i18n="navAbout"></a>
+        <a href="#availability" data-i18n="navDates"></a>
+        <a href="#reviews" data-i18n="navReviews"></a>
+      </nav>
+      <div class="header-tools">
+        <label class="language-picker">
+          <span>🌐</span>
+          <select id="languageSelect" aria-label="Language">
+            <option value="zh-HK">繁體中文</option>
+            <option value="zh-CN">简体中文</option>
+            <option value="en">English</option>
+            <option value="de">Deutsch</option>
+          </select>
+        </label>
+        <button class="admin-trigger" id="adminTrigger" aria-label="Admin">
+          <span>☰</span>
+          <i>●</i>
+        </button>
+      </div>
+    </header>
+    <main id="top">
+      <section class="hero container">
+        <p class="eyebrow" data-i18n="location"></p>
+        <div class="hero-title">
+          <div>
+            <h1 id="propertyTitle"></h1>
+            <p data-i18n="subtitle"></p>
+          </div>
+          <div>
+            <button id="shareBtn" data-i18n="share"></button>
+            <button id="saveBtn" data-i18n="save"></button>
+          </div>
+        </div>
+        <div class="gallery">
+          <img data-photo="0" alt="Cottage exterior" />
+          <img data-photo="1" alt="Living room" />
+          <img data-photo="2" alt="Kitchen" />
+          <img data-photo="3" alt="Bedroom" />
+          <img data-photo="4" alt="Bathroom" />
+          <button
+            class="show-photos"
+            id="photoBtn"
+            data-i18n="showPhotos"
+          ></button>
+        </div>
+      </section>
+      <section class="listing container" id="about">
+        <div class="listing-main">
+          <div class="host-row">
+            <div>
+              <h2 data-i18n="hostTitle"></h2>
+              <p data-i18n="capacity"></p>
+            </div>
+            <span class="avatar">E</span>
+          </div>
+          <div class="features">
+            <article>
+              <b>⌂</b>
+              <div>
+                <strong data-i18n="feature1Title"></strong>
+                <p data-i18n="feature1Text"></p>
+              </div>
+            </article>
+            <article>
+              <b>♜</b>
+              <div>
+                <strong data-i18n="feature2Title"></strong>
+                <p data-i18n="feature2Text"></p>
+              </div>
+            </article>
+            <article>
+              <b>★</b>
+              <div>
+                <strong data-i18n="feature3Title"></strong>
+                <p data-i18n="feature3Text"></p>
+              </div>
+            </article>
+          </div>
+          <div class="description"><p id="propertyDescription"></p></div>
+          <div class="amenities">
+            <h2 data-i18n="amenitiesTitle"></h2>
+            <div id="amenitiesList"></div>
+          </div>
+        </div>
+        <aside class="booking-card">
+          <div class="price-row">
+            <span>
+              <b>
+                £
+                <em id="nightPrice"></em>
+              </b>
+              <span data-i18n="perNight"></span>
+            </span>
+            <small>
+              ★ 4.94 ·
+              <u data-i18n="reviewCount"></u>
+            </small>
+          </div>
+          <div class="booking-inputs">
+            <button data-scroll-calendar>
+              <small data-i18n="checkin"></small>
+              <b id="cardCheckin"></b>
+            </button>
+            <button data-scroll-calendar>
+              <small data-i18n="checkout"></small>
+              <b id="cardCheckout"></b>
+            </button>
+            <label>
+              <small data-i18n="guests"></small>
+              <select id="guests">
+                <option>1</option>
+                <option selected>2</option>
+                <option>3</option>
+                <option>4</option>
+                <option>5</option>
+                <option>6</option>
+              </select>
+            </label>
+          </div>
+          <button
+            class="primary"
+            data-scroll-calendar
+            data-i18n="checkDates"
+          ></button>
+          <p class="no-charge" data-i18n="noCharge"></p>
+          <div class="costs" id="costs"></div>
+        </aside>
+      </section>
+      <section class="calendar-section" id="availability">
+        <div class="container">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">AVAILABILITY</p>
+              <h2 data-i18n="chooseDates"></h2>
+              <p id="dateSummary"></p>
+            </div>
+            <div class="legend">
+              <span>
+                <i></i>
+                <b data-i18n="available"></b>
+              </span>
+              <span>
+                <i class="off"></i>
+                <b data-i18n="unavailable"></b>
+              </span>
+            </div>
+          </div>
+          <p id="connectionStatus" role="status">正在連接預訂服務 / Connecting to booking service…</p>
+          <div class="booking-date-fields">
+            <label class="field"><span data-i18n="checkin"></span><input id="checkinDate" type="date" required></label>
+            <label class="field"><span data-i18n="checkout"></span><input id="checkoutDate" type="date" required></label>
+          </div>
+          <div class="calendars">
+            <button class="month-nav" id="prevMonth">‹</button>
+            <div class="month" id="monthOne"></div>
+            <div class="month desktop-month" id="monthTwo"></div>
+            <button class="month-nav" id="nextMonth">›</button>
+          </div>
+          <div class="checkout-bar">
+            <div>
+              <small data-i18n="checkin"></small>
+              <b id="barCheckin"></b>
+            </div>
+            <span>→</span>
+            <div>
+              <small data-i18n="checkout"></small>
+              <b id="barCheckout"></b>
+            </div>
+            <div class="bar-total">
+              <small id="staySummary"></small>
+              <b id="grandTotal"></b>
+            </div>
+            <button id="bookBtn" data-i18n="bookPay" disabled></button>
+          </div>
+        </div>
+      </section>
+      <section class="reviews container" id="reviews">
+        <div class="reviews-heading">
+          <h2>
+            ★ 4.94 ·
+            <span data-i18n="reviewCount"></span>
+          </h2>
+          <button
+            class="outline"
+            id="reviewBtn"
+            data-i18n="writeReview"
+          ></button>
+        </div>
+        <div class="review-grid" id="reviewGrid"></div>
+      </section>
+    </main>
+    <footer>
+      <div class="container">
+        <a class="brand light" href="#top">
+          <span>北</span>
+          <strong>Belfast city centre Moon House</strong>
+        </a>
+        <p data-i18n="footerTag"></p>
+        <div>
+          <a href="mailto:hello@causewaycottage.co.uk" data-i18n="contact"></a>
+          <button id="footerAdmin">Admin</button>
+        </div>
+        <small>© 2026 Belfast city centre Moon House</small>
+      </div>
+    </footer>
+    <div class="modal-wrap" id="modalWrap" hidden>
+      <div class="modal" id="modal">
+        <button class="modal-close" id="modalClose" aria-label="Close">
+          ×
+        </button>
+        <div id="modalContent"></div>
+      </div>
+    </div>
+    <script src="script.js?v=10"></script>
+  </body>
+</html>
